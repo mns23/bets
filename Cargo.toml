@@ -2,7 +2,7 @@
 name = "pallet-bets"
 version = "1.0.0-dev"
 description = "FRAME custom pallet for bets."
-edition = "2022"
+edition = "2021"
 license = "Unlicense"
 publish = false
 
