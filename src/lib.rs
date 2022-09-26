@@ -4,38 +4,72 @@
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
 /// <https://docs.substrate.io/reference/frame-pallets/>
 pub use pallet::*;
+// use codec::{Decode, Encode};
+// use frame_support::{
+// 	dispatch::{DispatchResult, Dispatchable, GetDispatchInfo},
+// 	ensure,
+// 	pallet_prelude::MaxEncodedLen,
+// 	storage::bounded_vec::BoundedVec,
+// 	traits::{Currency, ExistenceRequirement::KeepAlive, Get, Randomness, ReservableCurrency},
+// 	PalletId, RuntimeDebug,
+// };
+// use sp_runtime::{
+// 	traits::{AccountIdConversion, Saturating, Zero},
+// 	ArithmeticError, DispatchError,
+// };
+// use sp_std::prelude::*;
+// pub use weights::WeightInfo;
+
+
+// pub enum Prediction {
+// 	Homewin,
+// 	Awaywin,
+// 	Draw,
+// 	Under,
+// 	Over,
+// }
+
+// #[derive(
+// 	Encode, Decode, Default, RuntimeDebug
+// )]
+// pub struct SingleMatch {
+// 	pub id_match: u32,
+// 	pub status: u32,
+// 	//pub description: String,
+// 	pub home_score: u32,
+// 	pub away_score: u32,
+// }
+
+// #[derive(
+// 	Encode, Decode, Default, RuntimeDebug
+// )]
+// pub struct Bet<Balance> {
+// 	pub id_match: u32,
+// 	pub prediction: u32,
+// 	pub odd: u32,
+// 	pub amount: Balance,
+// }
+
 
 #[frame_support::pallet]
 pub mod pallet {
+	//use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]
-	pub struct Pallet<T>(_);
-
-	/// Configure the pallet by specifying the parameters and types on which it depends.
-	#[pallet::config]
-	pub trait Config: pallet_balances::Config + frame_system::Config {
-		/// Because this pallet emits events, it depends on the runtime's definition of an event.
-		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
-	}
-
+	#[derive(
+		Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+	)]
 	pub enum MatchStatus {
+		#[default]
 		Open,
 		Closed,
 		Postponed,
 	}
 
-	pub enum Prediction {
-		Homewin,
-		Awaywin,
-		Draw,
-		Under,
-		Over,
-	}
-
-	#[derive(Encode, Decode, Clone, Default, RuntimeDebug)]
+	#[derive(
+		Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+	)]
 	pub struct SingleMatch {
 		pub id_match: u32,
 		pub status: MatchStatus,
@@ -43,13 +77,17 @@ pub mod pallet {
 		pub home_score: u32,
 		pub away_score: u32,
 	}
+	
 
-	#[derive(Encode, Decode, Clone, Default, RuntimeDebug)]
-	pub struct Bet<Balance> {
-		pub id_match: u32,
-		pub prediction: Prediction,
-		pub odd: u32,
-		pub amount: Balance,
+	#[pallet::pallet]
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
+
+	/// Configure the pallet by specifying the parameters and types on which it depends.
+	#[pallet::config]
+	pub trait Config: frame_system::Config {
+		/// Because this pallet emits events, it depends on the runtime's definition of an event.
+		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 	}
 
 	// The pallet's runtime storage items.
@@ -57,7 +95,7 @@ pub mod pallet {
 	#[pallet::storage]
 	//pub(super) type Matches<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (T::AccountId, T::BlockNumber)>;
 	#[pallet::getter(fn matches_by_id)]
-	pub(super) type Matches =
+	pub(super) type Matches <T> =
 		StorageMap<_, Blake2_128Concat, u32, SingleMatch, ValueQuery>;
 	// Learn more about declaring storage items:
 	// https://docs.substrate.io/main-docs/build/runtime-storage/#declaring-storage-items
@@ -93,14 +131,15 @@ pub mod pallet {
 		#[pallet::weight(0)]
 		pub fn create_match(
 			origin: OriginFor<T>,
-			id_match,
+			id_match: u32,
 			status: MatchStatus,
 			home_score: u32,
 			away_score: u32,
+			hash: T::Hash
 		) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
 			// This function will return an error if the extrinsic is not signed.
-			let _ = ensure_signed(origin)?;
+			let sender = ensure_signed(origin)?;
 
 			// Verify that the specified claim has not already been stored.
 			//ensure!(!Claims::<T>::contains_key(&claim), Error::<T>::AlreadyClaimed);
@@ -114,10 +153,10 @@ pub mod pallet {
 				away_score,
 			};
 			// Store the claim with the sender and block number.
-			<Matches>::insert(id, single_match)
+			<Matches<T>>::insert(id_match, single_match);
 
 			// Emit an event that the claim was created.
-			Self::deposit_event(Event::ClaimCreated { who: sender, single_match });
+			Self::deposit_event(Event::ClaimCreated { who: sender, claim: hash});
 
 			Ok(())
 		}
