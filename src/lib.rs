@@ -3,81 +3,80 @@
 /// Edit this file to define custom logic or remove it if it is not needed.
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
 /// <https://docs.substrate.io/reference/frame-pallets/>
+use codec::{Decode, Encode};
+use frame_support::{
+	dispatch::{DispatchResult, Dispatchable, GetDispatchInfo},
+	ensure,
+	pallet_prelude::*,
+	storage::bounded_vec::BoundedVec,
+	traits::{Currency, ExistenceRequirement, Get, Randomness, ReservableCurrency, WithdrawReasons},
+	PalletId, RuntimeDebug,
+};
 pub use pallet::*;
-// use codec::{Decode, Encode};
-// use frame_support::{
-// 	dispatch::{DispatchResult, Dispatchable, GetDispatchInfo},
-// 	ensure,
-// 	pallet_prelude::MaxEncodedLen,
-// 	storage::bounded_vec::BoundedVec,
-// 	traits::{Currency, ExistenceRequirement::KeepAlive, Get, Randomness, ReservableCurrency},
-// 	PalletId, RuntimeDebug,
-// };
-// use sp_runtime::{
-// 	traits::{AccountIdConversion, Saturating, Zero},
-// 	ArithmeticError, DispatchError,
-// };
-// use sp_std::prelude::*;
-// pub use weights::WeightInfo;
+use frame_support::sp_runtime::{
+	traits::{AccountIdConversion, Saturating, Zero},
+	ArithmeticError, DispatchError,
+};
+use sp_std::prelude::*;
+//pub use weights::WeightInfo;
 
+pub type BetIndex = u32;
+type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
+type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balance;
+type BetInfoOf<T> = Bet<AccountIdOf<T>, BalanceOf<T>>;
 
-// pub enum Prediction {
-// 	Homewin,
-// 	Awaywin,
-// 	Draw,
-// 	Under,
-// 	Over,
-// }
+#[derive(
+	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+)]
+pub enum MatchStatus {
+	#[default]
+	Open,
+	Closed,
+	Postponed,
+}
 
-// #[derive(
-// 	Encode, Decode, Default, RuntimeDebug
-// )]
-// pub struct SingleMatch {
-// 	pub id_match: u32,
-// 	pub status: u32,
-// 	//pub description: String,
-// 	pub home_score: u32,
-// 	pub away_score: u32,
-// }
+#[derive(
+	Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+)]
+pub struct SingleMatch<AccountId> {
+	pub owner: AccountId,
+	pub id_match: u32,
+	pub status: MatchStatus,
+	//pub description: String,
+	pub home_score: u32,
+	pub away_score: u32,
+}
 
-// #[derive(
-// 	Encode, Decode, Default, RuntimeDebug
-// )]
-// pub struct Bet<Balance> {
-// 	pub id_match: u32,
-// 	pub prediction: u32,
-// 	pub odd: u32,
-// 	pub amount: Balance,
-// }
+#[derive(
+	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+)]
+pub enum Prediction {
+	#[default]
+	Homewin,
+	Awaywin,
+	Draw,
+	Under,
+	Over,
+}
+
+#[derive(
+	Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+)]
+pub struct Bet<AccountId, Balance> {
+	pub owner: AccountId,
+	pub id_match: u32,
+	pub prediction: Prediction,
+	pub odd: u32,
+	pub amount: Balance,
+}
 
 
 #[frame_support::pallet]
 pub mod pallet {
-	//use super::*;
+	use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	#[derive(
-		Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
-	)]
-	pub enum MatchStatus {
-		#[default]
-		Open,
-		Closed,
-		Postponed,
-	}
-
-	#[derive(
-		Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
-	)]
-	pub struct SingleMatch {
-		pub id_match: u32,
-		pub status: MatchStatus,
-		//pub description: String,
-		pub home_score: u32,
-		pub away_score: u32,
-	}
-	
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
@@ -88,15 +87,25 @@ pub mod pallet {
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
+
+		type Currency: ReservableCurrency<Self::AccountId>;
 	}
 
 	// The pallet's runtime storage items.
 	// https://docs.substrate.io/main-docs/build/runtime-storage/
 	#[pallet::storage]
-	//pub(super) type Matches<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (T::AccountId, T::BlockNumber)>;
 	#[pallet::getter(fn matches_by_id)]
 	pub(super) type Matches <T> =
-		StorageMap<_, Blake2_128Concat, u32, SingleMatch, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, u32, SingleMatch<AccountIdOf<T>>, OptionQuery>;
+	
+	#[pallet::storage]
+	#[pallet::getter(fn bets)]
+	pub(super) type Bets<T: Config> =
+		StorageMap<_, Blake2_128Concat, BetIndex, BetInfoOf<T>, OptionQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn bets_count)]
+	pub(super) type BetCount<T: Config> = StorageValue<_, BetIndex, ValueQuery>;
 	// Learn more about declaring storage items:
 	// https://docs.substrate.io/main-docs/build/runtime-storage/#declaring-storage-items
 	// pub type Something<T> = StorageValue<_, u32>;
@@ -106,6 +115,8 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
+		MatchCreated(BetIndex),
+		BetPlaced(BetIndex),
 		/// Event emitted when a claim has been created.
 		ClaimCreated { who: T::AccountId, claim: T::Hash },
 		/// Event emitted when a claim is revoked by the owner.
@@ -135,11 +146,10 @@ pub mod pallet {
 			status: MatchStatus,
 			home_score: u32,
 			away_score: u32,
-			hash: T::Hash
 		) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
 			// This function will return an error if the extrinsic is not signed.
-			let sender = ensure_signed(origin)?;
+			let owner = ensure_signed(origin)?;
 
 			// Verify that the specified claim has not already been stored.
 			//ensure!(!Claims::<T>::contains_key(&claim), Error::<T>::AlreadyClaimed);
@@ -147,6 +157,7 @@ pub mod pallet {
 			// Get the block number from the FRAME System pallet.
 			//let current_block = <frame_system::Pallet<T>>::block_number();
 			let single_match = SingleMatch {
+				owner,
 				id_match,
 				status,
 				home_score,
@@ -155,30 +166,52 @@ pub mod pallet {
 			// Store the claim with the sender and block number.
 			<Matches<T>>::insert(id_match, single_match);
 
-			// Emit an event that the claim was created.
-			Self::deposit_event(Event::ClaimCreated { who: sender, claim: hash});
+			Self::deposit_event(Event::MatchCreated(id_match));
 
 			Ok(())
 		}
 
-		// #[pallet::weight(0)]
-		// pub fn revoke_claim(origin: OriginFor<T>, claim: T::Hash) -> DispatchResult {
-		// 	// Check that the extrinsic was signed and get the signer.
-		// 	// This function will return an error if the extrinsic is not signed.
-		// 	let sender = ensure_signed(origin)?;
+		#[pallet::weight(0)]
+		pub fn place_bet(
+			origin: OriginFor<T>,
+			id_match: u32,
+			prediction: Prediction,
+			odd: u32,
+			amount: BalanceOf<T>,
+		) -> DispatchResult {
+			let owner = ensure_signed(origin)?;
 
-		// 	// Get owner of the claim, if none return an error.
-		// 	let (owner, _) = Claims::<T>::get(&claim).ok_or(Error::<T>::NoSuchClaim)?;
+			//ensure!(end > now, <Error<T>>::EndTooEarly);
 
-		// 	// Verify that sender of the current call is the claim owner.
-		// 	ensure!(sender == owner, Error::<T>::NotClaimOwner);
+			let deposit = amount;
+			// let imb = T::Currency::withdraw(
+			// 	&owner,
+			// 	deposit,
+			// 	WithdrawReasons::TRANSFER,
+			// 	ExistenceRequirement::AllowDeath,
+			// )?;
 
-		// 	// Remove claim from storage.
-		// 	Claims::<T>::remove(&claim);
+			let index = BetCount::<T>::get();
+			// not protected against overflow, see safemath section
+			BetCount::<T>::put(index + 1);
 
-		// 	// Emit an event that the claim was erased.
-		// 	Self::deposit_event(Event::ClaimRevoked { who: sender, claim });
-		// 	Ok(())
-		// }
+			// No fees are paid here if we need to create this account; that's why we don't just
+			// use the stock `transfer`.
+			//T::Currency::resolve_creating(&Self::fund_account_id(index), imb);
+
+			let bet = Bet {
+				owner,
+				id_match,
+				prediction,
+				odd,
+				amount,
+			};
+
+			<Bets<T>>::insert(index,bet);
+
+			Self::deposit_event(Event::BetPlaced(index));
+			Ok(().into())
+		}
+
 	}
 }
