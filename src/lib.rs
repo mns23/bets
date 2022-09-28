@@ -9,7 +9,7 @@ use frame_support::{
 	ensure,
 	pallet_prelude::*,
 	storage::bounded_vec::BoundedVec,
-	traits::{Currency, ExistenceRequirement, Get, Randomness, ReservableCurrency, WithdrawReasons},
+	traits::{Currency, ExistenceRequirement, Get, ReservableCurrency, WithdrawReasons, BalanceStatus},
 	PalletId, RuntimeDebug,
 };
 pub use pallet::*;
@@ -115,8 +115,9 @@ pub mod pallet {
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		MatchCreated(BetIndex),
+		MatchCreated(u32),
 		BetPlaced(BetIndex),
+		MatchClosed(u32),
 		/// Event emitted when a claim has been created.
 		ClaimCreated { who: T::AccountId, claim: T::Hash },
 		/// Event emitted when a claim is revoked by the owner.
@@ -126,6 +127,8 @@ pub mod pallet {
 	// Errors inform users that something went wrong.
 	#[pallet::error]
 	pub enum Error<T> {
+		MatchNotExists,
+		NoBetExists,
 		/// The claim already exists.
 		AlreadyClaimed,
 		/// The claim does not exist, so it cannot be revoked.
@@ -139,7 +142,7 @@ pub mod pallet {
 	// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
-		#[pallet::weight(0)]
+		#[pallet::weight(10_000)]
 		pub fn create_match(
 			origin: OriginFor<T>,
 			id_match: u32,
@@ -171,7 +174,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		#[pallet::weight(0)]
+		#[pallet::weight(10_000)]
 		pub fn place_bet(
 			origin: OriginFor<T>,
 			id_match: u32,
@@ -179,28 +182,31 @@ pub mod pallet {
 			odd: u32,
 			amount: BalanceOf<T>,
 		) -> DispatchResult {
-			let owner = ensure_signed(origin)?;
+			let bet_owner = ensure_signed(origin)?;
 
 			//ensure!(end > now, <Error<T>>::EndTooEarly);
-
-			let deposit = amount;
-			// let imb = T::Currency::withdraw(
-			// 	&owner,
-			// 	deposit,
-			// 	WithdrawReasons::TRANSFER,
-			// 	ExistenceRequirement::AllowDeath,
-			// )?;
 
 			let index = BetCount::<T>::get();
 			// not protected against overflow, see safemath section
 			BetCount::<T>::put(index + 1);
 
-			// No fees are paid here if we need to create this account; that's why we don't just
-			// use the stock `transfer`.
-			//T::Currency::resolve_creating(&Self::fund_account_id(index), imb);
+
+			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
+			let match_owner = selected_match.owner;
+
+			// T::Currency::transfer(
+			// 	&bet_owner,
+			// 	&match_owner,
+			// 	amount,
+			// 	ExistenceRequirement::AllowDeath,
+			// )?;
+
+			T::Currency::reserve(&bet_owner, amount)?;
+			//todo: multiply amount by odd
+			T::Currency::reserve(&match_owner, amount)?;
 
 			let bet = Bet {
-				owner,
+				owner: bet_owner,
 				id_match,
 				prediction,
 				odd,
@@ -210,6 +216,24 @@ pub mod pallet {
 			<Bets<T>>::insert(index,bet);
 
 			Self::deposit_event(Event::BetPlaced(index));
+			Ok(().into())
+		}
+
+		#[pallet::weight(10_000)]
+		pub fn end_match(
+			origin: OriginFor<T>,
+			id_match: u32,
+			status: MatchStatus,
+		) -> DispatchResult {
+			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
+			let match_owner = selected_match.owner;
+			let index = BetCount::<T>::get();
+			let selected_bet = Self::bets(0).ok_or(Error::<T>::NoBetExists)?;
+
+			// Move the deposit to the new owner.
+			T::Currency::repatriate_reserved(&(selected_bet.owner), &match_owner, selected_bet.amount, BalanceStatus::Free)?;
+
+			Self::deposit_event(Event::MatchClosed(index));
 			Ok(().into())
 		}
 
