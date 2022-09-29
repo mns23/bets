@@ -27,7 +27,7 @@ type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balan
 type BetInfoOf<T> = Bet<AccountIdOf<T>, BalanceOf<T>>;
 
 #[derive(
-	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq, Copy,
 )]
 pub enum MatchStatus {
 	#[default]
@@ -37,7 +37,7 @@ pub enum MatchStatus {
 }
 
 #[derive(
-	Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq,
+	Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq, Clone, Copy,
 )]
 pub struct SingleMatch<AccountId> {
 	pub owner: AccountId,
@@ -46,6 +46,11 @@ pub struct SingleMatch<AccountId> {
 	//pub description: String,
 	pub home_score: u32,
 	pub away_score: u32,
+	pub odd_homewin: u32,
+	pub odd_awaywin: u32,
+	pub odd_draw: u32,
+	pub odd_under: u32,
+	pub odd_over: u32,
 }
 
 #[derive(
@@ -58,6 +63,15 @@ pub enum Prediction {
 	Draw,
 	Under,
 	Over,
+}
+
+#[derive(
+	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq, Copy,
+)]
+pub enum BetStatus {
+	#[default]
+	Lost,
+	Won,
 }
 
 #[derive(
@@ -151,6 +165,11 @@ pub mod pallet {
 			status: MatchStatus,
 			home_score: u32,
 			away_score: u32,
+			odd_homewin: u32,
+			odd_awaywin: u32,
+			odd_draw: u32,
+			odd_under: u32,
+			odd_over: u32,
 		) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
 			// This function will return an error if the extrinsic is not signed.
@@ -167,6 +186,11 @@ pub mod pallet {
 				status,
 				home_score,
 				away_score,
+				odd_homewin,
+				odd_awaywin,
+				odd_draw,
+				odd_under,
+				odd_over,
 			};
 			// Store the claim with the sender and block number.
 			<Matches<T>>::insert(id_match, single_match);
@@ -222,21 +246,54 @@ pub mod pallet {
 		}
 
 		#[pallet::weight(10_000)]
-		pub fn end_match(
+		pub fn set_match_result(
 			origin: OriginFor<T>,
 			id_match: u32,
-			status: MatchStatus,
 		) -> DispatchResult {
-			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
-			let match_owner = selected_match.owner;
-			let index = BetCount::<T>::get();
+			let mut selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
+			let match_owner = selected_match.owner.clone();
 			let selected_bets = <Bets<T>>::iter_prefix_values(id_match);
+			let mut odd: u32 = 1;
+			//Check if value null
 
-			// Move the deposit to the new owner.
+			
+			//Update match status and results
+			selected_match.status = MatchStatus::Closed;
+			selected_match.home_score = 3;
+			selected_match.away_score = 3;
+			<Matches<T>>::insert(id_match, selected_match.clone());
+			// <Matches<T>>::try_mutate(id_match, |matchh| {
+			// 	*matchh = selected_match;
+			// 	Ok(())
+			// });
+			
+			//Check the winning status of the bet compared to match results
 			selected_bets.for_each(|bet|{
-				T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount, BalanceStatus::Free).unwrap();
+				let bet_status: BetStatus = match &bet.prediction {
+					Prediction::Homewin if selected_match.home_score > selected_match.away_score => {
+						odd = selected_match.odd_homewin;
+						BetStatus::Won
+					},
+					Prediction::Awaywin if selected_match.home_score < selected_match.away_score => BetStatus::Won,
+					Prediction::Draw if selected_match.home_score == selected_match.away_score => BetStatus::Won,
+					Prediction::Over if selected_match.home_score + selected_match.away_score > 3 => BetStatus::Won,
+					Prediction::Under if selected_match.home_score + selected_match.away_score < 3 => BetStatus::Won,
+					_ => BetStatus::Lost,
+				};
+				//maybe unwrap_or
+				if bet_status == BetStatus::Won {
+					T::Currency::repatriate_reserved(&match_owner, &(bet.owner), bet.amount, BalanceStatus::Free).unwrap();
+					T::Currency::unreserve(&match_owner, bet.amount);
+				} else {
+					T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount, BalanceStatus::Free).unwrap();
+					T::Currency::unreserve(&(bet.owner), bet.amount);
+				}
+				//change bet status and save
+				//bet.status = new_bet_status;
+				//let key : u8 = selected_bets.last_raw_key();
+				//<Bets<T>>::insert(id_match, selected_bets.last_raw_key(),bet);
 			});
-			Self::deposit_event(Event::MatchClosed(index));
+			Self::deposit_event(Event::MatchClosed(id_match));
 			Ok(().into())
 		}
 
