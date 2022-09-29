@@ -20,6 +20,7 @@ use frame_support::sp_runtime::{
 use sp_std::prelude::*;
 //pub use weights::WeightInfo;
 
+pub type MatchIndex = u32;
 pub type BetIndex = u32;
 type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balance;
@@ -101,7 +102,7 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn bets)]
 	pub(super) type Bets<T: Config> =
-		StorageMap<_, Blake2_128Concat, BetIndex, BetInfoOf<T>, OptionQuery>;
+		StorageDoubleMap<_, Blake2_128Concat, u32, Blake2_128Concat, BetIndex, BetInfoOf<T>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn bets_count)]
@@ -129,6 +130,7 @@ pub mod pallet {
 	pub enum Error<T> {
 		MatchNotExists,
 		NoBetExists,
+		ClaimFailed,
 		/// The claim already exists.
 		AlreadyClaimed,
 		/// The claim does not exist, so it cannot be revoked.
@@ -213,7 +215,7 @@ pub mod pallet {
 				amount,
 			};
 
-			<Bets<T>>::insert(index,bet);
+			<Bets<T>>::insert(id_match, index,bet);
 
 			Self::deposit_event(Event::BetPlaced(index));
 			Ok(().into())
@@ -228,11 +230,12 @@ pub mod pallet {
 			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
 			let match_owner = selected_match.owner;
 			let index = BetCount::<T>::get();
-			let selected_bet = Self::bets(0).ok_or(Error::<T>::NoBetExists)?;
+			let selected_bets = <Bets<T>>::iter_prefix_values(id_match);
 
 			// Move the deposit to the new owner.
-			T::Currency::repatriate_reserved(&(selected_bet.owner), &match_owner, selected_bet.amount, BalanceStatus::Free)?;
-
+			selected_bets.for_each(|bet|{
+				T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount, BalanceStatus::Free).unwrap();
+			});
 			Self::deposit_event(Event::MatchClosed(index));
 			Ok(().into())
 		}
