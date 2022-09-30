@@ -9,7 +9,7 @@ use frame_support::{
 	ensure,
 	pallet_prelude::*,
 	storage::bounded_vec::BoundedVec,
-	traits::{Currency, ExistenceRequirement, Get, ReservableCurrency, WithdrawReasons, BalanceStatus},
+	traits::{Currency, ExistenceRequirement, Get, ReservableCurrency, WithdrawReasons, BalanceStatus, Randomness},
 	PalletId, RuntimeDebug,
 };
 pub use pallet::*;
@@ -100,10 +100,14 @@ pub mod pallet {
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
+		/// The bets pallet id
+		#[pallet::constant]
+		type PalletId: Get<PalletId>;
+
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
-
 		type Currency: ReservableCurrency<Self::AccountId>;
+		type Randomness: Randomness<Self::Hash, Self::BlockNumber>;
 	}
 
 	// The pallet's runtime storage items.
@@ -162,9 +166,6 @@ pub mod pallet {
 		pub fn create_match(
 			origin: OriginFor<T>,
 			id_match: u32,
-			status: MatchStatus,
-			home_score: u32,
-			away_score: u32,
 			odd_homewin: u32,
 			odd_awaywin: u32,
 			odd_draw: u32,
@@ -183,9 +184,9 @@ pub mod pallet {
 			let single_match = SingleMatch {
 				owner,
 				id_match,
-				status,
-				home_score,
-				away_score,
+				status: MatchStatus::Open,
+				home_score: 0, 
+				away_score: 0,
 				odd_homewin,
 				odd_awaywin,
 				odd_draw,
@@ -205,7 +206,6 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			id_match: u32,
 			prediction: Prediction,
-			odd: u32,
 			amount: BalanceOf<T>,
 		) -> DispatchResult {
 			let bet_owner = ensure_signed(origin)?;
@@ -226,10 +226,17 @@ pub mod pallet {
 			// 	amount,
 			// 	ExistenceRequirement::AllowDeath,
 			// )?;
+			let odd: u32 = match prediction {
+				Prediction::Homewin => selected_match.odd_homewin,
+				Prediction::Awaywin => selected_match.odd_awaywin,
+				Prediction::Draw => selected_match.odd_draw,
+				Prediction::Over => selected_match.odd_over,
+				Prediction::Under => selected_match.odd_under,
+			};
 
 			T::Currency::reserve(&bet_owner, amount)?;
-			//todo: multiply amount by odd
-			T::Currency::reserve(&match_owner, amount)?;
+			//todo: add mod arithmetic
+			T::Currency::reserve(&match_owner, amount.saturating_mul((odd as u32).into()))?;
 
 			let bet = Bet {
 				owner: bet_owner,
@@ -253,14 +260,13 @@ pub mod pallet {
 			let mut selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
 			let match_owner = selected_match.owner.clone();
 			let selected_bets = <Bets<T>>::iter_prefix_values(id_match);
-			let mut odd: u32 = 1;
 			//Check if value null
 
 			
 			//Update match status and results
 			selected_match.status = MatchStatus::Closed;
-			selected_match.home_score = 3;
-			selected_match.away_score = 3;
+			selected_match.home_score = Self::generate_random_score(0);
+			selected_match.away_score = Self::generate_random_score(1);
 			<Matches<T>>::insert(id_match, selected_match.clone());
 			// <Matches<T>>::try_mutate(id_match, |matchh| {
 			// 	*matchh = selected_match;
@@ -270,23 +276,21 @@ pub mod pallet {
 			//Check the winning status of the bet compared to match results
 			selected_bets.for_each(|bet|{
 				let bet_status: BetStatus = match &bet.prediction {
-					Prediction::Homewin if selected_match.home_score > selected_match.away_score => {
-						odd = selected_match.odd_homewin;
-						BetStatus::Won
-					},
+					Prediction::Homewin if selected_match.home_score > selected_match.away_score => BetStatus::Won,
 					Prediction::Awaywin if selected_match.home_score < selected_match.away_score => BetStatus::Won,
 					Prediction::Draw if selected_match.home_score == selected_match.away_score => BetStatus::Won,
 					Prediction::Over if selected_match.home_score + selected_match.away_score > 3 => BetStatus::Won,
 					Prediction::Under if selected_match.home_score + selected_match.away_score < 3 => BetStatus::Won,
 					_ => BetStatus::Lost,
 				};
-				//maybe unwrap_or
+				
 				if bet_status == BetStatus::Won {
-					T::Currency::repatriate_reserved(&match_owner, &(bet.owner), bet.amount, BalanceStatus::Free).unwrap();
-					T::Currency::unreserve(&match_owner, bet.amount);
-				} else {
-					T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount, BalanceStatus::Free).unwrap();
+					//maybe unwrap_or
+					T::Currency::repatriate_reserved(&match_owner, &(bet.owner), bet.amount.saturating_mul((bet.odd as u32).into()), BalanceStatus::Free).unwrap();
 					T::Currency::unreserve(&(bet.owner), bet.amount);
+				} else {
+					T::Currency::repatriate_reserved(&(bet.owner), &match_owner.clone(), bet.amount, BalanceStatus::Free).unwrap();
+					T::Currency::unreserve(&match_owner, bet.amount);
 				}
 				//change bet status and save
 				//bet.status = new_bet_status;
@@ -297,5 +301,32 @@ pub mod pallet {
 			Ok(().into())
 		}
 
+	}
+}
+
+impl<T: Config> Pallet<T> {
+	///internal function from lottery pallet
+	fn generate_random_score(seed_diff: u32) -> u32 {
+		let mut random_number = Self::generate_random_number(seed_diff);
+		let max_trials: u32 = 10;
+		let max_score: u32 = 9;
+
+		// Best effort attempt to remove bias from modulus operator.
+		for i in 1..max_trials {
+			if random_number < u32::MAX - u32::MAX % max_score {
+				break
+			}
+			random_number = Self::generate_random_number(seed_diff + i);
+		}
+
+		random_number % max_score
+	}
+
+	///internal function from lottery pallet
+	fn generate_random_number(seed: u32) -> u32 {
+		let (random_seed, _) = T::Randomness::random(&(T::PalletId::get(), seed).encode());
+		let random_number = <u32>::decode(&mut random_seed.as_ref())
+			.expect("secure hashes should always be bigger than u32; qed");
+		random_number
 	}
 }
