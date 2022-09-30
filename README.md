@@ -1,10 +1,10 @@
 # Bets Pallet
 
-A simple module that allows each account to play both the role of better and bookmaker.
+A simple Substrate pallet that allows each account to play both the role of better and bookmaker.
 
 ## Overview
 
-The Assets allows each user to create a match to bet on and to bets in matches created by other users, through the following dispatchable functions: 
+The module allows each user to create a match to bet on and to bets in matches created by other users, through the following dispatchable functions: 
 
 * **create_match:** Passing as arguments the ID of the external match, and the odds, it creates a match on which to act as a bookmaker and let other users bet on this.
 * **place_bet:** Allows a user to bet on an open match. To do this, the user need to select the ID of the match on which bet on, the predicted result and the amount wagered. Once the transaction and the bet have been submitted, an amount equal to the bet one will be reserved in the bettor's account, an amount equal to the bet one multiplied by the established odds will be reserved in the bookmaker's account.
