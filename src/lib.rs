@@ -24,6 +24,11 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// #[cfg(test)]
+// mod mock;
+// #[cfg(test)]
+// mod tests;
+
 use codec::{Decode, Encode};
 use frame_support::{
 	dispatch::{DispatchResult},
@@ -158,8 +163,18 @@ pub mod pallet {
 
 	#[pallet::error]
 	pub enum Error<T> {
-		/// A specific match does not exist.
+		/// Cannot create a match with an already existing id_match.
+		IdMatchAlreadyExists,
+		/// A specific match does not exist, cannot place a bet or set match result.
 		MatchNotExists,
+		/// Bet owner and match owner must be different.
+		SameMatchOwner,
+		/// Match not open for bets or updates, functions available only on open matches
+		MatchClosed,
+		/// Insufficient free-balance to offer a bet.
+		MatchAccountInsufficientBalance,
+		/// Insufficient free-balance to place a bet.
+		BetAccountInsufficientBalance,
 		/// No bet associated with a specific match exists.
 		NoBetExists,
 		/// Payoff procedure failed.
@@ -185,7 +200,7 @@ pub mod pallet {
 			let owner = ensure_signed(origin)?;
 
 			// Verify that the specified claim has not already been stored.
-			//ensure!(!Claims::<T>::contains_key(&claim), Error::<T>::AlreadyClaimed);
+			ensure!(!<Matches<T>>::contains_key(id_match), Error::<T>::IdMatchAlreadyExists);
 
 			// Get the block number from the FRAME System pallet.
 			//let current_block = <frame_system::Pallet<T>>::block_number();
@@ -221,9 +236,12 @@ pub mod pallet {
 			amount: BalanceOf<T>,
 		) -> DispatchResult {
 			let bet_owner = ensure_signed(origin)?;
-			let index = BetCount::<T>::get();
+			ensure!(T::Currency::can_reserve(&bet_owner, amount), Error::<T>::BetAccountInsufficientBalance);
+			let bet_index = BetCount::<T>::get();
 			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
 			let match_owner = selected_match.owner;
+			ensure!(bet_owner != match_owner, Error::<T>::SameMatchOwner);
+			ensure!(selected_match.status == MatchStatus::Open, Error::<T>::MatchClosed);
 
 			// T::Currency::transfer(
 			// 	&bet_owner,
@@ -239,6 +257,8 @@ pub mod pallet {
 				Prediction::Under => selected_match.odd_under,
 			};
 
+			//todo: add mod arithmetic for fixed point odd.
+			ensure!(T::Currency::can_reserve(&match_owner, amount.saturating_mul((odd as u32).into())), Error::<T>::MatchAccountInsufficientBalance);
 			T::Currency::reserve(&bet_owner, amount)?;
 			//todo: add mod arithmetic for fixed point odd.
 			T::Currency::reserve(&match_owner, amount.saturating_mul((odd as u32).into()))?;
@@ -251,10 +271,10 @@ pub mod pallet {
 				amount,
 			};
 			// not protected against overflow, see safemath section.
-			BetCount::<T>::put(index + 1);
-			<Bets<T>>::insert(id_match, index,bet);
+			BetCount::<T>::put(bet_index + 1);
+			<Bets<T>>::insert(id_match, bet_index,bet);
 
-			Self::deposit_event(Event::BetPlaced(index));
+			Self::deposit_event(Event::BetPlaced(bet_index));
 			Ok(().into())
 		}
 
@@ -272,9 +292,9 @@ pub mod pallet {
 		) -> DispatchResult {
 			let _who = ensure_signed(origin)?;
 			let mut selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
+			ensure!(selected_match.status == MatchStatus::Open, Error::<T>::MatchClosed);
 			let match_owner = selected_match.owner.clone();
 			let selected_bets = <Bets<T>>::iter_prefix_values(id_match);
-			// todo: check null value.
 
 			// Update match status and results.
 			// todo: randomize also MatchStatus.
@@ -283,9 +303,6 @@ pub mod pallet {
 			selected_match.away_score = Self::generate_random_score(1);
 			<Matches<T>>::insert(id_match, selected_match.clone());
 			// <Matches<T>>::try_mutate(id_match, |matchh| {
-			// 	*matchh = selected_match;
-			// 	Ok(())
-			// });
 			
 			// Check the winning status of the bet compared to match results.
 			let mut payoff_result = true;
