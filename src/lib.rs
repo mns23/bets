@@ -21,7 +21,6 @@
 //!     	* The retrieval of a match result should be done through HTTP request using an ocw. To simplify this function,
 //! 		the RandomnessCollectiveFlip implementation of Randomness was used to generate the scores of the teams.
 
-
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(test)]
@@ -43,7 +42,6 @@ use frame_support::sp_runtime::{
 };
 use sp_std::prelude::*;
 //pub use weights::WeightInfo;
-
 
 pub type BetIndex = u32;
 type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
@@ -202,8 +200,6 @@ pub mod pallet {
 			// Verify that the specified claim has not already been stored.
 			ensure!(!<Matches<T>>::contains_key(id_match), Error::<T>::IdMatchAlreadyExists);
 
-			// Get the block number from the FRAME System pallet.
-			//let current_block = <frame_system::Pallet<T>>::block_number();
 			let single_match = SingleMatch {
 				owner,
 				id_match,
@@ -216,11 +212,10 @@ pub mod pallet {
 				odd_under,
 				odd_over,
 			};
-			// Store the claim with the sender and block number.
+			// Store the match with id_match as key.
 			<Matches<T>>::insert(id_match, single_match);
 
 			Self::deposit_event(Event::MatchCreated(id_match));
-
 			Ok(())
 		}
 
@@ -235,20 +230,19 @@ pub mod pallet {
 			prediction: Prediction,
 			amount: BalanceOf<T>,
 		) -> DispatchResult {
+			// Check that the extrinsic was signed and get the signer.
 			let bet_owner = ensure_signed(origin)?;
-			ensure!(T::Currency::can_reserve(&bet_owner, amount), Error::<T>::BetAccountInsufficientBalance);
 			let bet_index = BetCount::<T>::get();
+			// Retrieve the match struct and match_owner
 			let selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
 			let match_owner = selected_match.owner;
+			// Ensure bet owner and match owner are not the same account.
 			ensure!(bet_owner != match_owner, Error::<T>::SameMatchOwner);
+			// Ensure match is open.
 			ensure!(selected_match.status == MatchStatus::Open, Error::<T>::MatchClosed);
+			// Ensure that bettor account have suffient free balance.
+			ensure!(T::Currency::can_reserve(&bet_owner, amount), Error::<T>::BetAccountInsufficientBalance);
 
-			// T::Currency::transfer(
-			// 	&bet_owner,
-			// 	&match_owner,
-			// 	amount,
-			// 	ExistenceRequirement::AllowDeath,
-			// )?;
 			let odd: u32 = match prediction {
 				Prediction::Homewin => selected_match.odd_homewin,
 				Prediction::Awaywin => selected_match.odd_awaywin,
@@ -257,10 +251,10 @@ pub mod pallet {
 				Prediction::Under => selected_match.odd_under,
 			};
 
-			//todo: add mod arithmetic for fixed point odd.
+			// todo: add mod arithmetic for fixed point odd.
 			ensure!(T::Currency::can_reserve(&match_owner, amount.saturating_mul((odd as u32).into())), Error::<T>::MatchAccountInsufficientBalance);
 			T::Currency::reserve(&bet_owner, amount)?;
-			//todo: add mod arithmetic for fixed point odd.
+			// todo: add mod arithmetic for fixed point odd.
 			T::Currency::reserve(&match_owner, amount.saturating_mul((odd as u32).into()))?;
 
 			let bet = Bet {
@@ -272,6 +266,7 @@ pub mod pallet {
 			};
 			// not protected against overflow, see safemath section.
 			BetCount::<T>::put(bet_index + 1);
+			// insert bet into its storage double map.
 			<Bets<T>>::insert(id_match, bet_index,bet);
 
 			Self::deposit_event(Event::BetPlaced(bet_index));
@@ -302,7 +297,7 @@ pub mod pallet {
 			selected_match.home_score = Self::generate_random_score(0);
 			selected_match.away_score = Self::generate_random_score(1);
 			<Matches<T>>::insert(id_match, selected_match.clone());
-			// <Matches<T>>::try_mutate(id_match, |matchh| {
+			// todo: maybe can try also this way: <Matches<T>>::try_mutate, instead of insert.
 			
 			// Check the winning status of the bet compared to match results.
 			let mut payoff_result = true;
@@ -331,7 +326,7 @@ pub mod pallet {
 					}
 				}
 				
-				//change bet status and save.
+				// change bet status and save.
 				//bet.status = new_bet_status;
 				//let key : u8 = selected_bets.last_raw_key();
 				//<Bets<T>>::insert(id_match, selected_bets.last_raw_key(),bet);
@@ -345,7 +340,7 @@ pub mod pallet {
 }
 
 impl<T: Config> Pallet<T> {
-	///internal function from lottery pallet.
+	/// generate a random score for a match, some code from an internal function of lottery pallet.
 	fn generate_random_score(seed_diff: u32) -> u32 {
 		let mut random_number = Self::generate_random_number(seed_diff);
 		let max_trials: u32 = 10;
@@ -362,7 +357,7 @@ impl<T: Config> Pallet<T> {
 		random_number % max_score
 	}
 
-	///internal function from lottery pallet.
+	/// generate a random number, internal function from lottery pallet.
 	fn generate_random_number(seed: u32) -> u32 {
 		let (random_seed, _) = T::Randomness::random(&(T::PalletId::get(), seed).encode());
 		let random_number = <u32>::decode(&mut random_seed.as_ref())
