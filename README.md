@@ -13,12 +13,12 @@ The module allows each user to create a match to bet on and to place bets in mat
     * The retrieval of a match result should be done through HTTP request using an ocw. To simplify this function, the RandomnessCollectiveFlip implementation of Randomness was used to generate the scores of the teams.
 
 ## Usage
-The pallet can be used on a pre-customized node (starting from the base of the substrate-node-template), or integrated on its own node.
+The pallet can be used on a pre-customized node (starting from the base of the substrate-node-template), or integrated on your own node.
 ### Prerequisites
-* Rust and the Rust toolchain.
+* [`Rust and the Rust toolchain`](https://docs.substrate.io/install/rust-toolchain/)
 
 ### Using the ready to start node
-* Clone this repository containing a substrate-node-template fork, with a branch dedicated to the bet pallet : [`substrate-node-template fork`](https://github.com/mns23/substrate-node-template/tree/my-branch-v0.9.28)
+* Clone this repository containing a substrate-node-template fork, with a branch dedicated to the bet pallet : [`substrate-node-template`](https://github.com/mns23/substrate-node-template/tree/my-branch-v0.9.28)
 * Checkout to my-branch-v0.9.28
 * Check, compile and run the node through the following commands:
 ```shell
@@ -71,7 +71,7 @@ pallet-bets = { version = "1.0.0-dev", default-features = false, git = "https://
 
 ## Next Steps
 * Develop benchmarks and weights.
-* Use fixed point arithmetic for odds.
+* ~~Use fixed point arithmetic for odds.~~
 * Implement multi-bet, a bet based on multiple combined events.
 * Think about using a Lockable currency rather than Reservable.
 * Implement an oracle pallet through offchain workers: requires adding also an event forecasted endtime to the match struct. Some minutes after the forecasted endtime the oracle will perform HTTP request to the event tracker website and update the match status through the 'set_match_result' extrinsic, signign the transaction.

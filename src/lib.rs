@@ -39,14 +39,18 @@ use frame_support::{
 pub use pallet::*;
 use frame_support::sp_runtime::{
 	traits::{Saturating, Zero},
+	Percent,
 };
 use sp_std::prelude::*;
 //pub use weights::WeightInfo;
+
 
 pub type BetIndex = u32;
 type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 type BalanceOf<T> = <<T as Config>::Currency as Currency<AccountIdOf<T>>>::Balance;
 type BetInfoOf<T> = Bet<AccountIdOf<T>, BalanceOf<T>>;
+/// Odd touple composed by integer e fractional part through Percent
+type Odd = (u32, u8);
 
 #[derive(
 	Encode, Decode, Default, Clone, RuntimeDebug, MaxEncodedLen, TypeInfo, PartialEq, Copy,
@@ -69,11 +73,11 @@ pub struct SingleMatch<AccountId> {
 	pub status: MatchStatus,
 	pub home_score: u32,
 	pub away_score: u32,
-	pub odd_homewin: u32,
-	pub odd_awaywin: u32,
-	pub odd_draw: u32,
-	pub odd_under: u32,
-	pub odd_over: u32,
+	pub odd_homewin: Odd,
+	pub odd_awaywin: Odd,
+	pub odd_draw: Odd,
+	pub odd_under: Odd,
+	pub odd_over: Odd,
 }
 
 #[derive(
@@ -104,7 +108,7 @@ pub struct Bet<AccountId, Balance> {
 	pub owner: AccountId,
 	pub id_match: u32,
 	pub prediction: Prediction,
-	pub odd: u32,
+	pub odd: Odd,
 	pub amount: Balance,
 }
 
@@ -167,7 +171,11 @@ pub mod pallet {
 		MatchNotExists,
 		/// Bet owner and match owner must be different.
 		SameMatchOwner,
-		/// Match not open for bets or updates, functions available only on open matches
+		/// Fractional part of the Odd out of bound, must be into <0...99> range.
+		OddFracPartOutOfBound,
+		/// Integer part of the Odd out of bound, must be 1 <= odd.0 <= 4_294_967_295u32.
+		OddIntPartOutOfBound,
+		/// Match not open for bets or updates, functions available only on open matches.
 		MatchClosed,
 		/// Insufficient free-balance to offer a bet.
 		MatchAccountInsufficientBalance,
@@ -187,16 +195,19 @@ pub mod pallet {
 		pub fn create_match(
 			origin: OriginFor<T>,
 			id_match: u32,
-			odd_homewin: u32,
-			odd_awaywin: u32,
-			odd_draw: u32,
-			odd_under: u32,
-			odd_over: u32,
+			odd_homewin: Odd,
+			odd_awaywin: Odd,
+			odd_draw: Odd,
+			odd_under: Odd,
+			odd_over: Odd,
 		) -> DispatchResult {
 			// Check that the extrinsic was signed and get the signer.
 			// This function will return an error if the extrinsic is not signed.
 			let owner = ensure_signed(origin)?;
-
+			// Check fractional part of Odd into <0...99> range.
+			ensure!(odd_homewin.1 < 99 && odd_awaywin.1 < 99 && odd_draw.1 < 99 && odd_under.1 < 99 && odd_over.1 < 99, Error::<T>::OddFracPartOutOfBound);
+			// Check integer part of Odd >= 1.
+			ensure!(odd_homewin.0 > 0 && odd_awaywin.0 > 0 && odd_draw.0 > 0 && odd_under.0 > 0 && odd_over.0 > 0, Error::<T>::OddIntPartOutOfBound);
 			// Verify that the specified claim has not already been stored.
 			ensure!(!<Matches<T>>::contains_key(id_match), Error::<T>::IdMatchAlreadyExists);
 
@@ -243,7 +254,7 @@ pub mod pallet {
 			// Ensure that bettor account have suffient free balance.
 			ensure!(T::Currency::can_reserve(&bet_owner, amount), Error::<T>::BetAccountInsufficientBalance);
 
-			let odd: u32 = match prediction {
+			let odd: Odd = match prediction {
 				Prediction::Homewin => selected_match.odd_homewin,
 				Prediction::Awaywin => selected_match.odd_awaywin,
 				Prediction::Draw => selected_match.odd_draw,
@@ -251,11 +262,12 @@ pub mod pallet {
 				Prediction::Under => selected_match.odd_under,
 			};
 
+			let winnable_amount = (Percent::from_percent(odd.1) * amount).saturating_add(amount.saturating_mul((odd.0 as u32).into()));
 			// todo: add mod arithmetic for fixed point odd.
-			ensure!(T::Currency::can_reserve(&match_owner, amount.saturating_mul((odd as u32).into())), Error::<T>::MatchAccountInsufficientBalance);
+			ensure!(T::Currency::can_reserve(&match_owner, winnable_amount), Error::<T>::MatchAccountInsufficientBalance);
 			T::Currency::reserve(&bet_owner, amount)?;
 			// todo: add mod arithmetic for fixed point odd.
-			T::Currency::reserve(&match_owner, amount.saturating_mul((odd as u32).into()))?;
+			T::Currency::reserve(&match_owner, winnable_amount)?;
 
 			let bet = Bet {
 				owner: bet_owner,
@@ -287,10 +299,10 @@ pub mod pallet {
 		) -> DispatchResult {
 			let _who = ensure_signed(origin)?;
 			let mut selected_match = Self::matches_by_id(id_match).ok_or(Error::<T>::MatchNotExists)?;
+			// Check if match is open.
 			ensure!(selected_match.status == MatchStatus::Open, Error::<T>::MatchClosed);
 			let match_owner = selected_match.owner.clone();
 			let selected_bets = <Bets<T>>::iter_prefix_values(id_match);
-
 			// Update match status and results.
 			// todo: randomize also MatchStatus.
 			selected_match.status = MatchStatus::Closed;
@@ -310,17 +322,17 @@ pub mod pallet {
 					Prediction::Under if selected_match.home_score + selected_match.away_score < 3 => BetStatus::Won,
 					_ => BetStatus::Lost,
 				};
-				
+				let winnable_amount = (Percent::from_percent(bet.odd.1) * bet.amount).saturating_add(bet.amount.saturating_mul((bet.odd.0 as u32).into()));
 				// Pay off the bet.
 				if bet_status == BetStatus::Won {
-					let repatriate_result_mtob = T::Currency::repatriate_reserved(&match_owner, &(bet.owner), bet.amount.saturating_mul((bet.odd as u32).into()), BalanceStatus::Free).is_ok();
+					let repatriate_result_mtob = T::Currency::repatriate_reserved(&match_owner, &(bet.owner), winnable_amount, BalanceStatus::Free).is_ok();
 					let repatriate_result_btom = T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount, BalanceStatus::Free).is_ok();
 					if repatriate_result_mtob == false || repatriate_result_btom == false {
 						payoff_result = false;
 					}
 				} else {
 					let repatriate_result = T::Currency::repatriate_reserved(&(bet.owner), &match_owner, bet.amount.clone(), BalanceStatus::Free).is_ok();
-					let unreserve_result = T::Currency::unreserve(&match_owner, bet.amount.saturating_mul((bet.odd as u32).into()));
+					let unreserve_result = T::Currency::unreserve(&match_owner, winnable_amount);
 					if repatriate_result == false || !unreserve_result.is_zero() {
 						payoff_result = false;
 					}
