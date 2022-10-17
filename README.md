@@ -4,13 +4,17 @@ A simple Substrate pallet that allows each account to play both the role of bett
 
 ## Overview
 
-The module allows each user to create a match to bet on and to place bets in matches created by other users, through the following dispatchable functions: 
+N.B.: Due to the previous set_match_result function, which could iterate over an unlimited number of bets, a dev branch (both of the [`bets pallet`](https://github.com/mns23/bets/tree/dev) and of the [`substrate-node`](https://github.com/mns23/substrate-node-template/tree/pallet-bets-dev)) was set up to add an extra step of claim to the process, not making it more automated in closing of the match as before.
+
+The module allows each user to create a match to bet on and to place bets in matches created by other users, through the following dispatchable functions:
 
 * **create_match:** Passing as arguments the ID of the external match, and the odds, it creates a match on which to act as a bookmaker and let other users bet on this.
 * **place_bet:** Allows a user to bet on an open match. To do this, the user need to select the ID of the match on which bet on, the predicted result and the amount wagered. Once the transaction and the bet have been submitted, an amount equal to the bet one will be reserved in the bettor's account, an amount equal to the bet one multiplied by the established odds will be reserved in the bookmaker's account.
 * **set_match_result:** Retrieves the match result and saves it in storage. Subsequently, based on the latter, it scrolls all the bets related to that match and establishes the outcome, unreserving the entire amount of the bet to the winner (bettor or bookmaker). N.B.:
     * This call that can be made by any user at the moment, should be scheduled after the end of the event, saving the end-of-event timestamp among the match data.
     * The retrieval of a match result should be done through HTTP request using an ocw. To simplify this function, the RandomnessCollectiveFlip implementation of Randomness was used to generate the scores of the teams.
+    * In dev branch it only saves a random result, without payoff bets.
+* **claim_bet:** Only in dev branch. Permit to a user to claim a bet after match closing. 
 
 ## Usage
 The pallet can be used on a pre-customized node (starting from the base of the substrate-node-template), or integrated on your own node.
